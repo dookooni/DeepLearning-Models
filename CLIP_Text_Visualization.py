@@ -8,6 +8,8 @@ import torch
 from torch.utils.data import DataLoader, Dataset
 import torch.nn.functional as F
 import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 import clip
 from clip.model import CLIP
@@ -150,3 +152,18 @@ if __name__ == "__main__":
     print(f"predicted_feature shape : {predicted_feature.shape}")
     print(f"final_attn shape : {final_attn.shape}")
 
+    # Visualize the attention map
+    plt.figure(figsize=(10, 10))
+
+    input_text = "a photo of $ that " + data['relative_caption']
+    tokens = input_text.split()
+    sequence_length = len(tokens) + 2 
+    tokens = ["<start>"] + tokens + ["<end>"]  # Add start and end tokens
+
+    final_attn = final_attn[:, :, :sequence_length, :sequence_length]  # Select the relevant part of the attention map
+
+    sns.heatmap(final_attn.squeeze().cpu().numpy(), xticklabels=tokens, yticklabels=tokens ,cmap='viridis', cbar=True, annot=True)
+    plt.title("Attention Map")
+    plt.xlabel("Key")
+    plt.ylabel("Query")
+    plt.savefig("attention_map.png", bbox_inches='tight')
