@@ -64,7 +64,8 @@ def encode_with_pseudo_tokens(clip_model: CLIP, text: torch.Tensor, pseudo_token
     x = x + clip_model.positional_embedding.type(clip_model.dtype)
     x = x.permute(1, 0, 2)  # NLD -> LND
     if not mask:
-        x = clip_model.transformer(x)
+        """ CLIP의 Residual Attention Block이랑 Transformer 변경 """
+        x, final_attn = clip_model.transformer(x)
     else:
         # causal mask generation
         causal = torch.empty(77, 77, device=x.device)
@@ -111,7 +112,7 @@ def generate_val_predictions(clip_model: CLIP, data: Dataset,
 
     input_caption = "a photo of $ that " + relative_caption
     tokenized_input_captions = faclip.tokenize(input_caption, context_length=77).to(device)
-    text_features, final_attn = encode_with_pseudo_tokens(clip_model, tokenized_input_captions, pseudo_tokens, mask=True, clip_model_fa=clip_model_fa)
+    text_features, final_attn = encode_with_pseudo_tokens(clip_model_fa, tokenized_input_captions, pseudo_tokens, mask=False, clip_model_fa=clip_model_fa)
     text_features = text_features.unsqueeze(0)
     predicted_features = F.normalize(text_features)
 
@@ -166,4 +167,4 @@ if __name__ == "__main__":
     plt.title("Attention Map")
     plt.xlabel("Key")
     plt.ylabel("Query")
-    plt.savefig("attention_map.png", bbox_inches='tight')
+    plt.savefig("original_attention_map.png", bbox_inches='tight')
