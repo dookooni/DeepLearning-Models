@@ -185,7 +185,7 @@ class ResidualAttentionBlock(nn.Module):
         self.text = text
 
     """ FALIP 오리지널 Attention 연산 """
-    def attention(self, x: torch.Tensor,mask):
+    def attention(self, x: torch.Tensor, mask=None):
         T, B, _ = x.shape
         H = self.attn.num_heads
 
@@ -200,7 +200,8 @@ class ResidualAttentionBlock(nn.Module):
         return self.attn(x, x, x, need_weights=True, attn_mask=attn_mask)
 
 
-    def forward(self, x: torch.Tensor, mask):
+
+    def forward(self, x: torch.Tensor, mask=None):
 
         y = self.attention(self.ln_1(x), mask)
         attn = y[1]
@@ -344,9 +345,39 @@ class Transformer(nn.Module):
 
         self.text = text
 
-    def forward(self, x: torch.Tensor, mask, token_index=None):
+    def forward(self, x: torch.Tensor, mask=None, token_index=None):
         """ FALIP 적용 """
-        if mask.dim() == 4:
+        if mask is None:
+            attnlist = []
+            for i in range(self.layers):
+                x, attn = self.resblocks[i](x, mask=None)
+                attnlist.append(attn.unsqueeze(1))
+            final_attn = attnlist[-1]
+            return x, final_attn
+            
+        elif mask.dim() == 3:       
+            attnlist = []
+            for i in range(self.layers):
+
+                if mask is not None:
+                    if 0 <= i < 8:
+                        x, attn = self.resblocks[i](x, mask=None)
+                        attnlist.append(attn.unsqueeze(1))
+                    else:
+                        x, attn = self.resblocks[i](x, mask=mask)
+                        attnlist.append(attn.unsqueeze(1))
+                else:
+                    x, attn = self.resblocks[i](x, mask)
+
+            if mask is not None:
+                final_attn = attnlist[-1]
+                attn_weights = torch.cat(attnlist, dim=1)
+            if not self.text:
+                return x, attn_weights
+            else:
+                return x, final_attn
+
+        elif mask.dim() == 4:
             mask_sup = mask[:, 0] # mask[0, 1:N] = v1
             mask_bst = mask[:, 1] # mask[0, 0] = v2
 
@@ -372,50 +403,6 @@ class Transformer(nn.Module):
                 return x, attn_weights
             else:
                 return x
-            
-        else:       
-            attnlist = []
-            for i in range(self.layers):
-
-                if mask is not None:
-                    if 0 <= i < 8:
-                        x, attn = self.resblocks[i](x, mask=None)
-                        attnlist.append(attn.unsqueeze(1))
-                    else:
-                        x, attn = self.resblocks[i](x, mask=mask)
-                        attnlist.append(attn.unsqueeze(1))
-                else:
-                    x, attn = self.resblocks[i](x, mask)
-
-            if mask is not None:
-                final_attn = attnlist[-1]
-                attn_weights = torch.cat(attnlist, dim=1)
-            if not self.text:
-                return x, attn_weights
-            else:
-                return x, final_attn
-
-        """ PHS 적용 """
-        # attnlist = []
-        # for i in range(self.layers):
-        #     if mask is not None:
-        #         if 0 <= i < 11:
-        #             x, attn = self.resblocks[i](x, mask=None)
-        #             attnlist.append(attn.unsqueeze(1))
-        #         else:
-        #             for block in self.resblocks_phs:
-        #                 x, attn = block(x, mask=None, token_index=token_index)
-        #                 attn = attn.mean(dim=1)
-        #             attnlist.append(attn.unsqueeze(1))
-        #     else:
-        #         x, attn = self.resblocks[i](x, mask)
-
-        # if mask is not None:
-        #     attn_weights = torch.cat(attnlist, dim=1)
-        # if not self.text:
-        #     return x, attn_weights
-        # else:
-        #     return x
 
 class VisionTransformer(nn.Module):
     def __init__(self, input_resolution: int, patch_size: int, width: int, layers: int, heads: int, output_dim: int):
