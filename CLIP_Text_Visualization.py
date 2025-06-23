@@ -100,19 +100,22 @@ def encode_with_pseudo_tokens(clip_model: CLIP, text: torch.Tensor, pseudo_token
 
 @torch.no_grad()
 def generate_val_predictions(clip_model: CLIP, data: Dataset, 
-                                   pseudo_tokens: torch.Tensor, clip_model_fa=None) -> torch.Tensor:
+                                   pseudo_tokens: torch.Tensor, clip_model_fa=None, mask=False) -> torch.Tensor:
     """
     Generates features predictions for the validation set of CIRCO
     """
 
     # Compute the features
-    relative_caption = data['relative_caption']
+    relative_caption = data.get('relative_captions')
     if relative_caption is None:
         relative_caption = data.get("relative_caption")
 
+    if isinstance(relative_caption, list):
+        relative_caption = relative_caption[0] + " " + relative_caption[1]
+
     input_caption = "a photo of $ that " + relative_caption
     tokenized_input_captions = faclip.tokenize(input_caption, context_length=77).to(device)
-    text_features, final_attn = encode_with_pseudo_tokens(clip_model_fa, tokenized_input_captions, pseudo_tokens, mask=False, clip_model_fa=clip_model_fa)
+    text_features, final_attn = encode_with_pseudo_tokens(clip_model_fa, tokenized_input_captions, pseudo_tokens, mask=mask, clip_model_fa=clip_model_fa)
     text_features = text_features.unsqueeze(0)
     predicted_features = F.normalize(text_features)
 
@@ -133,38 +136,173 @@ if __name__ == "__main__":
     preprocess = targetpad_transform(1.25, clip_model_fa.visual.input_resolution)
     clip_model_fa.eval()
 
-    if args.dataset_path == "fashioniq":
-        dataset = FashionIQDataset(args.dataset_path, 'val', ['dress', 'toptee', 'skirt'], preprocess, no_duplicates=False)
-    elif args.dataset_path == "cirr":
+    if args.dataset_type == "fashioniq":
+        dataset = FashionIQDataset(args.dataset_path, 'val', ['dress', 'toptee', 'shirt'], 'relative', preprocess, no_duplicates=False)
+        data = dataset[0]
+
+        phi, _ = torch.hub.load(repo_or_dir="miccunifi/SEARLE", model='searle', source='github', backbone=args.model_type)
+        phi = phi.to(device).eval()
+
+        with torch.no_grad():
+            pseudo_token = extract_pseudo_tokens_with_phi(clip_model, phi, data)
+        pseudo_token = pseudo_token.to(device)
+
+        predicted_feature_no_mask, final_attn_no_mask = generate_val_predictions(clip_model, data, pseudo_token, clip_model_fa, mask=False)
+        predicted_feature, final_attn = generate_val_predictions(clip_model, data, pseudo_token, clip_model_fa, mask=True)
+
+        # Visualize the attention map
+        plt.figure(figsize=(10, 10))
+
+        data_caption = data.get('relative_captions')[0] + " " + data.get('relative_captions')[1]
+        print(data_caption)
+
+        input_text = "a photo of $ that " + data_caption
+        tokens = input_text.split()
+        sequence_length = len(tokens) + 2 
+        tokens = ["<START>"] + tokens + ["<END>"]  # Add start and end tokens
+        ylabel = ["<END>"]
+
+        final_attn = final_attn[:, :, :sequence_length, :sequence_length]  # Select the relevant part of the attention map
+
+        sns.heatmap(final_attn.squeeze().cpu().numpy(), xticklabels=tokens, yticklabels=tokens ,cmap='viridis', cbar=True, annot=True)
+        plt.title("Attention Map")
+        plt.xlabel("Key")
+        plt.ylabel("Query")
+        plt.savefig("FashionIq_Mask_Attention_Map.png", bbox_inches='tight')
+
+        eos_attn = final_attn[:, :, -1, :]
+        print(eos_attn.shape)
+        plt.figure(figsize=(12, 8))
+        sns.heatmap(eos_attn.squeeze(0).cpu().numpy(), xticklabels=tokens, yticklabels=ylabel, annot=True, fmt=".2f", cmap="viridis", linewidths=.5)
+        plt.xlabel("Key")
+        plt.ylabel("Query")
+        plt.tight_layout()
+        plt.savefig("FashionIq_Mask_Eos_Attention_Map.png", bbox_inches='tight')
+
+        final_attn_no_mask = final_attn_no_mask[:, :, :sequence_length, :sequence_length]  # Select the relevant part of the attention map
+
+        sns.heatmap(final_attn_no_mask.squeeze().cpu().numpy(), xticklabels=tokens, yticklabels=tokens ,cmap='viridis', cbar=True, annot=True)
+        plt.title("Attention Map")
+        plt.xlabel("Key")
+        plt.ylabel("Query")
+        plt.savefig("FashionIq_Original_Attention_Map.png", bbox_inches='tight')
+
+        eos_attn_no_mask = final_attn_no_mask[:, :, -1, :]
+        plt.figure(figsize=(12, 8))
+        sns.heatmap(eos_attn_no_mask.squeeze(0).cpu().numpy(), xticklabels=tokens, yticklabels=ylabel, annot=True, fmt=".2f", cmap="viridis", linewidths=.5)
+        plt.xlabel("Key")
+        plt.ylabel("Query")
+        plt.tight_layout()
+        plt.savefig("FashionIq_Original_Eos_Attention_Map.png", bbox_inches='tight')
+
+    elif args.dataset_type == "cirr":
         dataset = CIRRDataset(args.dataset_path, 'val', 'relative', preprocess)
+        data = dataset[0]
+
+        phi, _ = torch.hub.load(repo_or_dir="miccunifi/SEARLE", model='searle', source='github', backbone=args.model_type)
+        phi = phi.to(device).eval()
+
+        with torch.no_grad():
+            pseudo_token = extract_pseudo_tokens_with_phi(clip_model, phi, data)
+        pseudo_token = pseudo_token.to(device)
+
+        predicted_feature_no_mask, final_attn_no_mask = generate_val_predictions(clip_model, data, pseudo_token, clip_model_fa, mask=False)
+        predicted_feature, final_attn = generate_val_predictions(clip_model, data, pseudo_token, clip_model_fa, mask=True)
+
+        # Visualize the attention map
+        plt.figure(figsize=(10, 10))
+
+        input_text = "a photo of $ that " + data['relative_caption']
+        tokens = input_text.split()
+        sequence_length = len(tokens) + 2 
+        tokens = ["<START>"] + tokens + ["<END>"]  # Add start and end tokens
+        ylabel = ["<END>"]
+
+        final_attn = final_attn[:, :, :sequence_length, :sequence_length]  # Select the relevant part of the attention map
+
+        sns.heatmap(final_attn.squeeze().cpu().numpy(), xticklabels=tokens, yticklabels=tokens ,cmap='viridis', cbar=True, annot=True)
+        plt.title("Attention Map")
+        plt.xlabel("Key")
+        plt.ylabel("Query")
+        plt.savefig("CIRR_Mask_Attention_Map.png", bbox_inches='tight')
+
+        eos_attn = final_attn[:, :, -1, :]
+        print(eos_attn.shape)
+        plt.figure(figsize=(12, 8))
+        sns.heatmap(eos_attn.squeeze(0).cpu().numpy(), xticklabels=tokens, yticklabels=ylabel, annot=True, fmt=".2f", cmap="viridis", linewidths=.5)
+        plt.xlabel("Key")
+        plt.ylabel("Query")
+        plt.tight_layout()
+        plt.savefig("CIRR_Mask_Eos_Attention_Map.png", bbox_inches='tight')
+
+        final_attn_no_mask = final_attn_no_mask[:, :, :sequence_length, :sequence_length]  # Select the relevant part of the attention map
+
+        sns.heatmap(final_attn_no_mask.squeeze().cpu().numpy(), xticklabels=tokens, yticklabels=tokens ,cmap='viridis', cbar=True, annot=True)
+        plt.title("Attention Map")
+        plt.xlabel("Key")
+        plt.ylabel("Query")
+        plt.savefig("CIRR_Original_Attention_Map.png", bbox_inches='tight')
+
+        eos_attn_no_mask = final_attn_no_mask[:, :, -1, :]
+        plt.figure(figsize=(12, 8))
+        sns.heatmap(eos_attn_no_mask.squeeze(0).cpu().numpy(), xticklabels=tokens, yticklabels=ylabel, annot=True, fmt=".2f", cmap="viridis", linewidths=.5)
+        plt.xlabel("Key")
+        plt.ylabel("Query")
+        plt.tight_layout()
+        plt.savefig("CIRR_Original_Eos_Attention_Map.png", bbox_inches='tight')
+
     else:
         dataset = CIRCODataset(args.dataset_path, "val", "relative", preprocess)
-    data = dataset[0]
+        data = dataset[0]
 
-    phi, _ = torch.hub.load(repo_or_dir="miccunifi/SEARLE", model='searle', source='github', backbone=args.model_type)
-    phi = phi.to(device).eval()
+        phi, _ = torch.hub.load(repo_or_dir="miccunifi/SEARLE", model='searle', source='github', backbone=args.model_type)
+        phi = phi.to(device).eval()
 
-    with torch.no_grad():
-        pseudo_token = extract_pseudo_tokens_with_phi(clip_model, phi, data)
-    pseudo_token = pseudo_token.to(device)
+        with torch.no_grad():
+            pseudo_token = extract_pseudo_tokens_with_phi(clip_model, phi, data)
+        pseudo_token = pseudo_token.to(device)
 
-    predicted_feature, final_attn = generate_val_predictions(clip_model, data, pseudo_token, clip_model_fa)
+        predicted_feature_no_mask, final_attn_no_mask = generate_val_predictions(clip_model, data, pseudo_token, clip_model_fa, mask=False)
+        predicted_feature, final_attn = generate_val_predictions(clip_model, data, pseudo_token, clip_model_fa, mask=True)
 
-    print(f"predicted_feature shape : {predicted_feature.shape}")
-    print(f"final_attn shape : {final_attn.shape}")
+        # Visualize the attention map
+        plt.figure(figsize=(10, 10))
 
-    # Visualize the attention map
-    plt.figure(figsize=(10, 10))
+        input_text = "a photo of $ that " + data['relative_caption']
+        tokens = input_text.split()
+        sequence_length = len(tokens) + 2 
+        tokens = ["<START>"] + tokens + ["<END>"]  # Add start and end tokens
+        ylabel = ["<END>"]
 
-    input_text = "a photo of $ that " + data['relative_caption']
-    tokens = input_text.split()
-    sequence_length = len(tokens) + 2 
-    tokens = ["<start>"] + tokens + ["<end>"]  # Add start and end tokens
+        final_attn = final_attn[:, :, :sequence_length, :sequence_length]  # Select the relevant part of the attention map
 
-    final_attn = final_attn[:, :, :sequence_length, :sequence_length]  # Select the relevant part of the attention map
+        sns.heatmap(final_attn.squeeze().cpu().numpy(), xticklabels=tokens, yticklabels=tokens ,cmap='viridis', cbar=True, annot=True)
+        plt.title("Attention Map")
+        plt.xlabel("Key")
+        plt.ylabel("Query")
+        plt.savefig("CIRCO_Mask_Attention_Map.png", bbox_inches='tight')
 
-    sns.heatmap(final_attn.squeeze().cpu().numpy(), xticklabels=tokens, yticklabels=tokens ,cmap='viridis', cbar=True, annot=True)
-    plt.title("Attention Map")
-    plt.xlabel("Key")
-    plt.ylabel("Query")
-    plt.savefig("original_attention_map.png", bbox_inches='tight')
+        eos_attn = final_attn[:, :, -1, :]
+        print(eos_attn.shape)
+        plt.figure(figsize=(12, 8))
+        sns.heatmap(eos_attn.squeeze(0).cpu().numpy(), xticklabels=tokens, yticklabels=ylabel, annot=True, fmt=".2f", cmap="viridis", linewidths=.5)
+        plt.xlabel("Key")
+        plt.ylabel("Query")
+        plt.tight_layout()
+        plt.savefig("CIRCO_Mask_Eos_Attention_Map.png", bbox_inches='tight')
+
+        final_attn_no_mask = final_attn_no_mask[:, :, :sequence_length, :sequence_length]  # Select the relevant part of the attention map
+
+        sns.heatmap(final_attn_no_mask.squeeze().cpu().numpy(), xticklabels=tokens, yticklabels=tokens ,cmap='viridis', cbar=True, annot=True)
+        plt.title("Attention Map")
+        plt.xlabel("Key")
+        plt.ylabel("Query")
+        plt.savefig("CIRCO_Original_Attention_Map.png", bbox_inches='tight')
+
+        eos_attn_no_mask = final_attn_no_mask[:, :, -1, :]
+        plt.figure(figsize=(12, 8))
+        sns.heatmap(eos_attn_no_mask.squeeze(0).cpu().numpy(), xticklabels=tokens, yticklabels=ylabel, annot=True, fmt=".2f", cmap="viridis", linewidths=.5)
+        plt.xlabel("Key")
+        plt.ylabel("Query")
+        plt.tight_layout()
+        plt.savefig("CIRCO_Original_Eos_Attention_Map.png", bbox_inches='tight')
